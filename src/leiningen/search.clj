@@ -1,30 +1,96 @@
 (ns leiningen.search
-  "Searches the indexed clojars.org repository. Giving -v as first argument
-prints the versions instead of the description."
-  (:use [clojure.contrib.str-utils :only (str-join re-sub)]
-        lein-search.core
-        leiningen.update-repo)
-  (:import java.io.File))
+  (:use [leiningen.core :only [home-dir repositories-for #_user-settings]]
+        [leiningen.util.file :only [delete-file-recursively]])
+  (:require [clojure.java.io :as io]
+            [clojure.string :as string]
+            [clojure.pprint :as pp])
+  (:import (java.util.zip ZipFile)
+           (java.net URL)
+           (org.apache.lucene.index IndexReader)
+           (org.apache.lucene.search IndexSearcher)
+           (org.apache.lucene.queryParser QueryParser)
+           (org.apache.lucene.util Version)
+           (org.apache.lucene.analysis.standard StandardAnalyzer)
+           (org.apache.lucene.store SimpleFSDirectory)))
 
-(defn search [what & args]
-  (if (map? what)
-    ;; To be backwards-compatible with Leiningen 1.2 and prior, we
-    ;; must accept and discard a project argument. Current Leiningen (1.3+)
-    ;; inspects the arg list and only passes in the project if needed.
-    (apply search args)
-    (let [show-versions (= "-v" what)
-          what (if show-versions (first args) what)]
-      (if (.exists (File. (str *lein-dir* "/clojars")))
-        (let [results (search-clojar what)]
-          (println (format "Results for %s:" what))
-          (doseq [{:keys [description versions artifact-id group-id]} results
-                  :let [name (clojars-artifact-name group-id artifact-id)
-                        versions-string (str-join ", " versions)
-                        description (or description "No description given")
-                        desc (re-sub #"\n\s*" " " description)]]
-            (println (if show-versions
-                       (format "%s: %s" name versions-string)
-                       (format "%-40s - %s" name desc)))))
-        ;; If there's no index found, fetch it and try again.
-        (do (update-repo)
-            (apply search what args))))))
+;;; Data shuffling
+
+(defn- unzip [source target-dir]
+  (let [zip (ZipFile. source)
+        entries (enumeration-seq (.entries zip))
+        target-file #(io/file target-dir (.getName %))]
+    (doseq [entry entries :when (not (.isDirectory entry))
+            :let [f (target-file entry)]]
+      (.mkdirs (.getParentFile f))
+      (io/copy (.getInputStream zip entry) f))))
+
+(defn index-location [url]
+  ;; TODO: what are all url-safe chars that aren't filename-safe?
+  (io/file (home-dir) "indices" (string/replace url #"[:/]" "_")))
+
+(defn remote-index-location [url]
+  (format "%s/.index/nexus-maven-repository-index.zip" url))
+
+(defn- download-index [[id {url :url}]]
+  (with-open [stream (.openStream (URL. (remote-index-location url)))]
+    (println "Downloading index from" id "-" url)
+    (let [tmp (java.io.File/createTempFile "lein" "index")]
+      (println :copying-to tmp)
+      (try (io/copy stream tmp)
+           (println :unzippin)
+           (unzip tmp (index-location url))
+           (println :unzipped)
+           true
+           (finally (.delete tmp))))))
+
+(defn download-needed? [[id {url :url}]]
+  (not (.exists (index-location url))))
+
+(defn ensure-fresh-index [repository]
+  (try (if (download-needed? repository)
+         (download-index repository)
+         true)
+       (catch java.io.FileNotFoundException _
+         false)))
+
+;;; Lucene stuff
+
+(defn make-directory [url]
+  (-> (index-location url)
+      io/file
+      SimpleFSDirectory.))
+
+(defn- make-query [query]
+  (.parse (QueryParser. Version/LUCENE_30 "a"
+                        (StandardAnalyzer. Version/LUCENE_30)) query))
+
+(defn parse-identifier [u]
+  ;; TODO: is this really classifier? support it?
+  (let [[group artifact version classifier] (.split u "\\|")
+        group (if (not= group artifact) group)]
+    [(symbol group artifact)
+     version]))
+
+(defn results [searcher top-docs]
+  (for [score-doc (.scoreDocs top-docs)
+        :let [doc (.doc searcher (.doc score-doc))]]
+    [(parse-identifier (first (.getValues doc "u")))
+     (first (.getValues doc "d"))]))
+
+(defn search-repository [[id {url :url}] query]
+  (with-open [r (IndexReader/open (make-directory url))
+              searcher (IndexSearcher. r)]
+    (pp/pprint (results searcher
+                        (.search searcher (make-query query)
+                                 25
+                                 #_(:search-page-size (user-settings)))))))
+
+;;; Task
+(defn search [project query]
+  (if (= "--update" query)
+    (do (delete-file-recursively (index-location "") :silently)
+        (doseq [repo (repositories-for project)]
+          (ensure-fresh-index repo)))
+    (doseq [repo (repositories-for project)]
+      (when (ensure-fresh-index repo)
+        (search-repository repo query)))))
