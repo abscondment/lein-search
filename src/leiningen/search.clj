@@ -35,11 +35,8 @@
   (with-open [stream (.openStream (URL. (remote-index-location url)))]
     (println "Downloading index from" id "-" url)
     (let [tmp (java.io.File/createTempFile "lein" "index")]
-      (println :copying-to tmp)
       (try (io/copy stream tmp)
-           (println :unzippin)
            (unzip tmp (index-location url))
-           (println :unzipped)
            true
            (finally (.delete tmp))))))
 
