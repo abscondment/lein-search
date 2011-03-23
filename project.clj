@@ -1,4 +1,4 @@
-(defproject lein-search "0.5.0-SNAPSHOT"
+(defproject org.clojars.technomancy/lein-search "1.0.0-SNAPSHOT"
   :description "Leiningen plugin to search repositories."
   ;; :dependencies [[org.sonatype.nexus/nexus-indexer "3.0.4"]]
   ;; :dev-dependencies [[org.sonatype.nexus/nexus-indexer "3.0.4"]]
