@@ -1,7 +1,6 @@
 (defproject org.clojars.technomancy/lein-search "1.0.0-SNAPSHOT"
   :description "Leiningen plugin to search repositories."
-  ;; :dependencies [[org.sonatype.nexus/nexus-indexer "3.0.4"]]
-  ;; :dev-dependencies [[org.sonatype.nexus/nexus-indexer "3.0.4"]]
-  :dependencies  [[org.apache.lucene/lucene-core "3.0.3"]]
-  :dev-dependencies  [[org.apache.lucene/lucene-core "3.0.3"]]
+  :dependencies  [[clucy "0.1.0"]]
+  ;; if it's not in dev-deps, the leiningen process won't have access to it
+  :dev-dependencies  [[clucy "0.1.0"]]
   :eval-in-leiningen true)

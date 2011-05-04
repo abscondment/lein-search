@@ -1,19 +1,11 @@
 (ns leiningen.search
-  (:use [leiningen.core :only [home-dir repositories-for #_user-settings]]
+  (:use [leiningen.core :only [home-dir repositories-for user-settings]]
         [leiningen.util.file :only [delete-file-recursively]])
   (:require [clojure.java.io :as io]
             [clojure.string :as string]
-            [clojure.pprint :as pp])
+            [clucy.core :as clucy])
   (:import (java.util.zip ZipFile)
-           (java.net URL)
-           (org.apache.lucene.index IndexReader)
-           (org.apache.lucene.search IndexSearcher)
-           (org.apache.lucene.queryParser QueryParser)
-           (org.apache.lucene.util Version)
-           (org.apache.lucene.analysis.standard StandardAnalyzer)
-           (org.apache.lucene.store SimpleFSDirectory)))
-
-;;; Data shuffling
+           (java.net URL)))
 
 (defn- unzip [source target-dir]
   (let [zip (ZipFile. source)
@@ -25,7 +17,6 @@
       (io/copy (.getInputStream zip entry) f))))
 
 (defn index-location [url]
-  ;; TODO: what are all url-safe chars that aren't filename-safe?
   (io/file (home-dir) "indices" (string/replace url #"[:/]" "_")))
 
 (defn remote-index-location [url]
@@ -37,57 +28,48 @@
     (let [tmp (java.io.File/createTempFile "lein" "index")]
       (try (io/copy stream tmp)
            (unzip tmp (index-location url))
-           true
            (finally (.delete tmp))))))
 
-(defn download-needed? [[id {url :url}]]
+(defn- download-needed? [[id {:keys [url]}]]
   (not (.exists (index-location url))))
 
 (defn ensure-fresh-index [repository]
-  (try (if (download-needed? repository)
-         (download-index repository)
-         true)
+  (try (when (download-needed? repository)
+         (download-index repository))
+       true
        (catch java.io.FileNotFoundException _
          false)))
 
-;;; Lucene stuff
+(defn search-repository [[id {:keys [url]} :as repo] query]
+  (if (ensure-fresh-index repo)
+    (clucy/search (clucy/disk-index (.getAbsolutePath (index-location url)))
+                  query (:search-page-size (user-settings) 25) :a)
+    (binding [*out* *err*]
+      (println "Warning: couldn't download index for" url))))
 
-(defn make-directory [url]
-  (-> (index-location url)
-      io/file
-      SimpleFSDirectory.))
-
-(defn- make-query [query]
-  (.parse (QueryParser. Version/LUCENE_30 "a"
-                        (StandardAnalyzer. Version/LUCENE_30)) query))
-
-(defn parse-identifier [u]
-  ;; TODO: is this really classifier? support it?
+(defn parse-result [{:keys [u d]}]
   (let [[group artifact version classifier] (.split u "\\|")
-        group (if (not= group artifact) group)]
-    [(symbol group artifact)
-     version]))
+        group (if (not= group artifact) group)
+        identifier [(symbol group artifact) version]]
+    (if d
+      [identifier d]
+      [identifier])))
 
-(defn results [searcher top-docs]
-  (for [score-doc (.scoreDocs top-docs)
-        :let [doc (.doc searcher (.doc score-doc))]]
-    [(parse-identifier (first (.getValues doc "u")))
-     (first (.getValues doc "d"))]))
+(defn- print-results [results]
+  (doseq [result (sort-by ffirst (map parse-result results))]
+    (apply println result)))
 
-(defn search-repository [[id {url :url}] query]
-  (with-open [r (IndexReader/open (make-directory url))
-              searcher (IndexSearcher. r)]
-    (pp/pprint (results searcher
-                        (.search searcher (make-query query)
-                                 25
-                                 #_(:search-page-size (user-settings)))))))
+(defn search
+  "Search remote repository contents.
 
-;;; Task
-(defn search [project query]
+The first run will download a set of indices, which will take a
+while. Pass in --update as the query to force a fresh download of all
+indices."
+  [project query]
+  ;; you know what would be just super? pattern matching.
   (if (= "--update" query)
-    (do (delete-file-recursively (index-location "") :silently)
-        (doseq [repo (repositories-for project)]
-          (ensure-fresh-index repo)))
+    (doseq [[_ {url :url} :as repo] (repositories-for project)]
+      (delete-file-recursively (index-location url) :silently)
+      (ensure-fresh-index repo))
     (doseq [repo (repositories-for project)]
-      (when (ensure-fresh-index repo)
-        (search-repository repo query)))))
+      (print-results (search-repository repo query)))))

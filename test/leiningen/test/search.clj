@@ -20,12 +20,10 @@
            (vec (.list (index-location "http://example.com/repo"))))))
 
 (deftest test-searchy
-  (let [printed (atom [])]
-    (binding [clojure.pprint/pprint (partial swap! printed conj)
-              results (comp doall results)]
-      (search-repository ["test" {:url "http://example.com/repo"}] "hooke"))
-    (is (= '#{[[[robert/hooke "1.0.0"] "Hooke your functions!"]
-               [[robert/hooke "1.0.1"] "Hooke your functions!"]
-               [[robert/hooke "1.0.2"] "Hooke your functions!"]
-               [[robert/hooke "1.1.0"] "Hooke your functions!"]]}
-           (set @printed)))))
+  (let [results (search-repository ["test" {:url "http://example.com/repo"}]
+                                   "hooke")]
+    (is (= '#{[[robert/hooke "1.0.0"] "Hooke your functions!"]
+              [[robert/hooke "1.0.1"] "Hooke your functions!"]
+              [[robert/hooke "1.0.2"] "Hooke your functions!"]
+              [[robert/hooke "1.1.0"] "Hooke your functions!"]}
+           (set (map parse-result results))))))
